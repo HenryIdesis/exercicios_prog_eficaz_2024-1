@@ -41,160 +41,139 @@ def index():
 
 @app.route('/clientes', methods=['POST'])
 def clientes():
-
-    # conectar colm a base
     conn = connect_db()
-    cliente_id = None
+    if not conn:
+        return {"erro": "Erro ao conectar com o banco de dados"}, 500
 
-    if conn is None:
-        resp = {"erro": "Erro ao conectar com o banco de dados"}
-        return resp, 500
-    
     dado_cliente = request.json
-    cursor = conn.cursor(dictionary=True)
+    campos_obrigatorios = ['nome', 'email', 'cpf', 'senha']
+
+    for campo in campos_obrigatorios:
+        if campo not in dado_cliente:
+            return {"erro": f"Campo '{campo}' é obrigatório."}, 400
+        
     sql = "INSERT INTO tbl_clientes (nome, email, cpf, senha) VALUES (%s, %s, %s, %s)"
-    values = (dado_cliente['nome'], dado_cliente['email'], dado_cliente['cpf'], dado_cliente['senha'])
-    cursor.execute(sql, values)
-    conn.commit()
+    values = tuple(dado_cliente[campo] for campo in campos_obrigatorios)
 
-    cliente_id = cursor.lastrowid
-    resp = "cliente cadastrado com sucesso"
-
-    cursor.close()
-    conn.close()
-
-    return resp, 201
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, values)
+            conn.commit()
+            return {"mensagem": "cliente cadastrado com sucesso"}, 201
+    except Error as err:
+        return {"erro": f"Erro ao cadastrar cliente: {err}"}, 500
+    finally:
+        conn.close()
 
 @app.route('/clientes/<int:id>', methods=['GET'])
 def procurar_clientes(id):
-    """Busca um cliente específico na tabela tbl_clientes pelo seu ID."""
-    conn = connect_db()  # Conecta ao banco de dados
-    if conn:
-        cursor = conn.cursor(dictionary=True)  # Adicionei dictionary=True para o retorno ser um dicionário
-        sql = "SELECT * FROM tbl_clientes WHERE id = %s"  # Comando SQL para buscar um cliente pelo ID
-
-        try:
-            # Executa o comando SQL com o ID fornecido
-            cursor.execute(sql, (id,))
-            # Recupera o resultado da consulta
-            cliente = cursor.fetchone()
-
-            # Verifica se o cliente foi encontrado e retorna os detalhes como JSON
-            if cliente:
-                resp = {"id": cliente['id'], "nome": cliente['nome'], "email": cliente['email'], "cpf": cliente['cpf'], "senha": cliente['senha']}
-                return resp, 200  # Retorna o cliente encontrado e o código de status 200 (OK)
-            else:
-                return {"erro": "cliente não encontrado"}, 404  # Retorna uma mensagem de erro se não encontrar o cliente
-        except Error as err:
-            # Em caso de erro na busca, retorna uma mensagem de erro
-            return {"erro": f"Erro ao buscar cliente: {err}"}, 500
-        finally:
-            # Fecha o cursor e a conexão para liberar recursos
-            cursor.close()
-            conn.close()
-    else:
+    conn = connect_db()
+    if not conn:
         return {"erro": "Erro ao conectar com o banco de dados"}, 500
+
+    sql = "SELECT * FROM tbl_clientes WHERE id = %s"
+    try:
+        with conn.cursor(dictionary=True) as cursor:
+            cursor.execute(sql, (id,))
+            cliente = cursor.fetchone()
+            if cliente:
+                return cliente, 200
+            return {"erro": "cliente não encontrado"}, 404
+    except Error as err:
+        return {"erro": f"Erro ao buscar cliente: {err}"}, 500
+    finally:
+        conn.close()
 
 @app.route('/clientes', methods=['GET'])
-def listar_cliente():
-    """Busca e exibe todos os clientes da tabela tbl_clientes."""
-    conn = connect_db()  # Conecta ao banco de dados
-    if conn:
-        cursor = conn.cursor(dictionary=True)  # Cria um cursor para executar comandos SQL e retorna resultados como dicionários
-        sql = "SELECT * FROM tbl_clientes"  # Comando SQL para selecionar todos os clientes
-
-        try:
-            cursor.execute(sql)  # Executa o comando SQL sem parâmetros
-            clientes = cursor.fetchall()  # Recupera todos os resultados da consulta
-
-            # Verifica se encontrou clientes e retorna a lista
-            if clientes:
-                return {"clientes": clientes}, 200  # Retorna a lista de clientes como JSON
-            else:
-                return {"erro": "Nenhum cliente encontrado"}, 404  # Retorna uma mensagem de erro se não encontrar clientes
-        except Error as err:
-            # Em caso de erro na busca, retorna uma mensagem de erro
-            return {"erro": f"Erro ao buscar clientes: {err}"}, 500
-        finally:
-            # Fecha o cursor e a conexão para liberar recursos
-            cursor.close()
-            conn.close()
-    else:
+def listar_clientes():
+    conn = connect_db()
+    if not conn:
         return {"erro": "Erro ao conectar com o banco de dados"}, 500
+
+    filtro_nome = request.args.get('nome')
+    ordenar_por = request.args.get('ordenar_por', 'id')
+    ordem = request.args.get('ordem', 'asc')
+
+    sql = "SELECT * FROM tbl_clientes"
+    params = []
+
+    if filtro_nome:
+        sql += " WHERE nome LIKE %s"
+        params.append(f"%{filtro_nome}%")
+
+    if ordenar_por not in ['id', 'nome', 'email', 'cpf', 'senha']:
+        ordenar_por = 'id'
+    if ordem not in ['asc', 'desc']:
+        ordem = 'asc'
+
+    sql += f" ORDER BY {ordenar_por} {ordem}"
+
+    try:
+        with conn.cursor(dictionary=True) as cursor:
+            cursor.execute(sql, params)
+            clientes = cursor.fetchall()
+            if clientes:
+                return {"clientes": clientes}, 200
+            return {"erro": "Nenhum cliente encontrado"}, 404
+    except Error as err:
+        return {"erro": f"Erro ao buscar clientes: {err}"}, 500
+    finally:
+        conn.close()
+
 
 @app.route('/clientes/<int:cliente_id>', methods=['PUT'])
 def atualizar_cliente(cliente_id):
-    """Atualiza os dados de um cliente existente na tabela tbl_clientes."""
-    conn = connect_db()  # Conecta ao banco de dados
-    if conn:
-        cursor = conn.cursor()  # Cria um cursor para executar comandos SQL
-        dado_cliente = request.json  # Obtém os dados enviados no corpo da requisição
+    conn = connect_db()
+    if not conn:
+        return {"erro": "Erro ao conectar com o banco de dados"}, 500
 
-        # Verifica se os dados 'nome' e 'ano' estão no JSON recebido
-        if 'nome' not in dado_cliente or 'email' not in dado_cliente or 'cpf' not in dado_cliente or 'senha' not in dado_cliente:
-            return {"erro": "Dados inválidos, verifique se os dados necessários foram fornecidos"}, 400
+    dado_cliente = request.json
+    campos_obrigatorios = ['nome', 'email', 'cpf', 'senha']
 
-        sql = "UPDATE tbl_clientes SET nome = %s, email = %s, cpf = %s, senha = %s WHERE id = %s"  # Comando SQL para atualizar o cliente
-        values = (dado_cliente['nome'], dado_cliente['email'], dado_cliente['cpf'], dado_cliente['senha'],cliente_id)  # Dados a serem atualizados
+    for campo in campos_obrigatorios:
+        if campo not in dado_cliente:
+            return {"erro": f"Campo '{campo}' é obrigatório."}, 400
 
-        try:
-            # Executa o comando SQL com os valores fornecidos
+    try:
+        with conn.cursor(dictionary=True) as cursor:
+            cursor.execute("SELECT * FROM tbl_clientes WHERE id = %s", (cliente_id,))
+            cliente_atual = cursor.fetchone()
+
+            if not cliente_atual:
+                return {"erro": "cliente não encontrado!"}, 404
+
+            sql = "UPDATE tbl_clientes SET nome = %s, email = %s, cpf = %s, senha = %s WHERE id = %s"
+            values = tuple(dado_cliente[campo] for campo in campos_obrigatorios) + (cliente_id,)
+
             cursor.execute(sql, values)
-            # Confirma a transação no banco de dados
             conn.commit()
 
-            # Verifica se alguma linha foi afetada (atualizada)
-            if cursor.rowcount > 0:
-                return {"mensagem": "cliente atualizado com sucesso!"}, 200
-            else:
-                return {"erro": "cliente não encontrado!"}, 404
-        except Error as err:
-            # Em caso de erro na atualização, retorna a mensagem de erro
-            return {"erro": f"Erro ao atualizar cliente: {err}"}, 500
-        finally:
-            # Fecha o cursor e a conexão para liberar recursos
-            cursor.close()
-            conn.close()
-    else:
-        return {"erro": "Erro ao conectar com o banco de dados"}, 500
-    
+            return {"mensagem": "cliente atualizado com sucesso!"}, 200
+
+    except Error as err:
+        return {"erro": f"Erro ao atualizar cliente: {err}"}, 500
+    finally:
+        conn.close()
+
 @app.route('/clientes/<int:cliente_id>', methods=['DELETE'])
 def delete_cliente(cliente_id):
-    """Remove um usuário da tabela tbl_clientes e suas referências em outras tabelas."""    
-    conn = connect_db()  # Conecta ao banco de dados
-
-    if conn:
-        cursor = conn.cursor(dictionary=True)  # Adiciona dictionary=True para retorno como dicionário
-
-        # Comando SQL para buscar um usuário pelo ID
-        sql_select = "SELECT * FROM tbl_clientes WHERE id = %s"
-        # Comando SQL para remover o usuário
-        sql_remove_cliente = "DELETE FROM tbl_clientes WHERE id = %s"
-
-        try:
-            # Executa o comando SQL com o ID fornecido
-            cursor.execute(sql_select, (cliente_id,))
-            cliente = cursor.fetchone()
-
-            # Verifica se o usuário foi encontrado
-            if cliente:
-                # Remove o usuário
-                cursor.execute(sql_remove_cliente, (cliente_id,))
-                conn.commit()
-
-                resp = {"mensagem": "cliente removido com sucesso"}
-                return resp, 200  # Retorna mensagem de sucesso e o código de status 200 (OK)
-            else:
-                return {"erro": "cliente não encontrado"}, 404  # Retorna mensagem de erro se não encontrar o usuário
-        except Error as err:
-            # Em caso de erro, retorna uma mensagem de erro
-            return {"erro": f"Erro ao buscar cliente: {err}"}, 500
-        finally:
-            # Fecha o cursor e a conexão para liberar recursos
-            cursor.close()
-            conn.close()
-    else:
+    conn = connect_db()
+    if not conn:
         return {"erro": "Erro ao conectar com o banco de dados"}, 500
+
+    sql_remove = "DELETE FROM tbl_clientes WHERE id = %s"
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM tbl_clientes WHERE id = %s", (cliente_id,))
+            if cursor.fetchone():
+                cursor.execute(sql_remove, (cliente_id,))
+                conn.commit()
+                return {"mensagem": "cliente removido com sucesso"}, 200
+            return {"erro": "cliente não encontrado"}, 404
+    except Error as err:
+        return {"erro": f"Erro ao buscar cliente: {err}"}, 500
+    finally:
+        conn.close()
     
 @app.route('/produtos', methods=['POST'])
 def produtos():
@@ -352,6 +331,7 @@ def delete_produto(produto_id):
             conn.close()
     else:
         return {"erro": "Erro ao conectar com o banco de dados"}, 500
+
     
 @app.route('/carrinhos', methods=['POST'])
 def carrinhos():
@@ -360,7 +340,7 @@ def carrinhos():
         return {"erro": "Erro ao conectar com o banco de dados"}, 500
 
     dado_carrinho = request.json
-    if 'produto_id' not in dado_carrinho or 'quantidade' not in dado_carrinho:
+    if 'produto_id' not in dado_carrinho or 'quantidade' not in dado_carrinho or 'cliente_id' not in dado_carrinho:
         return {"erro": "Dados inválidos"}, 400
 
     # Verificar a quantidade em estoque
@@ -377,8 +357,8 @@ def carrinhos():
                 return {"erro": "Quantidade solicitada excede o qtd_em_estoque disponível"}, 400
 
             # Inserir no carrinho
-            sql = "INSERT INTO tbl_carrinhos (produto_id, quantidade) VALUES (%s, %s)"
-            values = (dado_carrinho['produto_id'], dado_carrinho['quantidade'])
+            sql = "INSERT INTO tbl_carrinhos (produto_id, quantidade, cliente_id) VALUES (%s, %s, %s)"
+            values = (dado_carrinho['produto_id'], dado_carrinho['quantidade'], dado_carrinho['cliente_id'])
             cursor.execute(sql, values)
 
             # Atualizar o qtd_em_estoque do produto
@@ -501,7 +481,131 @@ def delete_carrinho(carrinho_id):
     finally:
         conn.close()
 
+@app.route('/carrinhos/cliente/<int:cliente_id>', methods=['GET'])
+def listar_carrinhos_cliente(cliente_id):
+    conn = connect_db()
+    if not conn:
+        return {"erro": "Erro ao conectar com o banco de dados"}, 500
 
+    sql = "SELECT * FROM tbl_carrinhos WHERE cliente_id = %s"
+    
+    try:
+        with conn.cursor(dictionary=True) as cursor:
+            cursor.execute(sql, (cliente_id,))
+            carrinho = cursor.fetchall()
+            if carrinho:
+                return {"carrinho": carrinho}, 200
+            return {"erro": "Nenhum carrinho encontrado para este cliente"}, 404
+    except Error as err:
+        return {"erro": f"Erro ao buscar carrinho do cliente: {err}"}, 500
+    finally:
+        conn.close()
+
+@app.route('/pedidos', methods=['POST'])
+def pedidos():
+    conn = connect_db()
+    if not conn:
+        return {"erro": "Erro ao conectar com o banco de dados"}, 500
+
+    dado_pedido = request.json
+    campos_obrigatorios = ['cliente_id', 'carrinho_id', 'data_hora', 'status']
+
+    for campo in campos_obrigatorios:
+        if campo not in dado_pedido:
+            return {"erro": f"Campo '{campo}' é obrigatório."}, 400
+        
+    sql = "INSERT INTO tbl_pedidos (cliente_id, carrinho_id, data_hora, status) VALUES (%s, %s, %s, %s)"
+    values = tuple(dado_pedido[campo] for campo in campos_obrigatorios)
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, values)
+            conn.commit()
+            return {"mensagem": "pedido cadastrado com sucesso"}, 201
+    except Error as err:
+        return {"erro": f"Erro ao cadastrar pedido: {err}"}, 500
+    finally:
+        conn.close()
+
+@app.route('/pedidos/<int:id>', methods=['GET'])
+def procurar_pedidos(id):
+    conn = connect_db()
+    if not conn:
+        return {"erro": "Erro ao conectar com o banco de dados"}, 500
+
+    sql = "SELECT * FROM tbl_pedidos WHERE id = %s"
+    try:
+        with conn.cursor(dictionary=True) as cursor:
+            cursor.execute(sql, (id,))
+            pedido = cursor.fetchone()
+            if pedido:
+                return pedido, 200
+            return {"erro": "pedido não encontrado"}, 404
+    except Error as err:
+        return {"erro": f"Erro ao buscar pedido: {err}"}, 500
+    finally:
+        conn.close()
+
+@app.route('/pedidos', methods=['GET'])
+def listar_pedidos():
+    conn = connect_db()
+    if not conn:
+        return {"erro": "Erro ao conectar com o banco de dados"}, 500
+
+    filtro_cliente_id = request.args.get('cliente_id')
+    filtro_carrinho_id = request.args.get('carrinho_id')
+    ordenar_por = request.args.get('ordenar_por', 'id')
+    ordem = request.args.get('ordem', 'asc')
+
+    sql = "SELECT * FROM tbl_pedidos"
+    params = []
+
+    if filtro_cliente_id:
+        sql += " WHERE nome LIKE %s"
+        params.append(f"%{filtro_cliente_id}%")
+
+    if filtro_carrinho_id:
+        sql += " WHERE nome LIKE %s"
+        params.append(f"%{filtro_carrinho_id}%")
+
+    if ordenar_por not in ['id', 'cliente_id', 'carrinho_id', 'data_hora', 'status']:
+        ordenar_por = 'id'
+    if ordem not in ['asc', 'desc']:
+        ordem = 'asc'
+
+    sql += f" ORDER BY {ordenar_por} {ordem}"
+
+    try:
+        with conn.cursor(dictionary=True) as cursor:
+            cursor.execute(sql, params)
+            pedidos = cursor.fetchall()
+            if pedidos:
+                return {"pedidos": pedidos}, 200
+            return {"erro": "Nenhum pedido encontrado"}, 404
+    except Error as err:
+        return {"erro": f"Erro ao buscar pedidos: {err}"}, 500
+    finally:
+        conn.close()
+
+@app.route('/pedidos/cliente/<int:cliente_id>', methods=['GET'])
+def listar_pedidos_cliente(cliente_id):
+    conn = connect_db()
+    if not conn:
+        return {"erro": "Erro ao conectar com o banco de dados"}, 500
+
+    sql = "SELECT * FROM tbl_pedidos WHERE cliente_id = %s"
+    
+    try:
+        with conn.cursor(dictionary=True) as cursor:
+            cursor.execute(sql, (cliente_id,))
+            pedidos = cursor.fetchall()
+            if pedidos:
+                return {"pedidos": pedidos}, 200
+            return {"erro": "Nenhum pedido encontrado para este cliente"}, 404
+    except Error as err:
+        return {"erro": f"Erro ao buscar pedidos do cliente: {err}"}, 500
+    finally:
+        conn.close()
 
 if __name__ == '__main__':
       
